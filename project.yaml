@@ -1,0 +1,232 @@
+esphome:
+  name: gas-meter-counter
+  friendly_name: Gas Meter
+
+  # --- Restore value after reboot ---
+  # This ensures the count does not start from zero after a power failure
+  on_boot:
+    priority: -100
+    then:
+      - lambda: |-
+          if (id(pulse_counter_saved) < 0) {
+            ESP_LOGW("main", "Invalid pulse count in flash, resetting to 0");
+            id(pulse_counter_saved) = 0;
+          }
+          id(pulse_counter_gas) = id(pulse_counter_saved);
+          float total = id(total_gas_m3_start_value) + (id(pulse_counter_gas) * id(m3_gas_per_pulse));
+          ESP_LOGI("main", "Boot: Restored pulse count = %d, total gas = %.3f", id(pulse_counter_gas), total);
+          id(gasmeter_pulse).publish_state(id(pulse_counter_gas));
+          id(total_gas_m3).publish_state(total);
+
+esp8266:
+  board: esp01_1m
+
+# Enable logging
+logger:
+
+# Enable Home Assistant API
+api:
+  encryption:
+    key: "v8K3t9jQ/2hYpL6sQ4Zx1wBv+7NfT2yXk5JcG8mN2aE="
+
+  on_client_connected:
+    then:
+      - delay: 2s
+      - lambda: |-
+          if (id(pulse_counter_from_ha).has_state() && !isnan(id(pulse_counter_from_ha).state)) {
+            int ha_value = (int) id(pulse_counter_from_ha).state;
+            if (ha_value > id(pulse_counter_gas)) {
+              id(pulse_counter_gas) = ha_value;
+              id(pulse_counter_saved) = ha_value;
+              ESP_LOGI("main", "Restored from HA sensor: %d", ha_value);
+              id(gasmeter_pulse).publish_state(ha_value);
+              id(total_gas_m3).publish_state(
+                id(total_gas_m3_start_value) + ha_value * id(m3_gas_per_pulse)
+              );
+            }
+          } else {
+            ESP_LOGI("main", "No state =(");
+          }
+          // Now, regardless of whether restoration happened,
+          // publish the final (most up-to-date) state.
+          ESP_LOGI("main", "Publishing initial state to HA.");
+          id(gasmeter_pulse).publish_state(id(pulse_counter_gas));
+          id(total_gas_m3).publish_state(
+            id(total_gas_m3_start_value) + (id(pulse_counter_gas) * id(m3_gas_per_pulse))
+          );
+
+ota:
+  - platform: esphome
+    password: "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6"
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "Gas Meter Fallback Hotspot"
+    password: "z9y8x7w6v5u4t3s2"
+
+captive_portal:
+
+web_server:
+  port: 80
+
+# --- Global variables and meter settings ---
+globals:
+  - id: pulse_counter_gas
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: m3_gas_per_pulse
+    type: float
+    initial_value: '0.01'
+  - id: total_gas_m3_start_value
+    type: float
+    initial_value: '113.933'
+  - id: pulse_counter_saved
+    type: int
+    restore_value: yes
+    initial_value: '0'
+
+# --- Script for delayed saving to flash ---
+script:
+  - id: save_to_flash_script
+    # The restart mode cancels the previous run if the script is called again.
+    # This creates a "debounce" effect (delay).
+    mode: restart
+    then:
+      - delay: 15s # Delay before saving. Can be changed.
+      - lambda: |-
+          id(pulse_counter_saved) = id(pulse_counter_gas);
+          ESP_LOGI("main", "Delayed save to flash complete. Saved value: %d", id(pulse_counter_saved));
+
+# --- Sensors ---
+sensor:
+  - platform: adc
+    pin: A0
+    name: "Hall value"
+    id: hall_sensor_analog
+    update_interval: 300ms
+    filters:
+      - median:
+          window_size: 7
+          send_every: 4
+          send_first_at: 1
+      - multiply: 1.0
+
+  - platform: homeassistant
+    id: pulse_counter_from_ha
+    entity_id: input_number.gas_impulse_count
+
+  - platform: template
+    name: "Gas Impulses"
+    id: gasmeter_pulse
+    icon: "mdi:pulse"
+    unit_of_measurement: "imp"
+    accuracy_decimals: 0
+
+  - platform: template
+    name: "Total Gas"
+    id: total_gas_m3
+    icon: "mdi:fire"
+    unit_of_measurement: "m³"
+    accuracy_decimals: 2
+    device_class: gas
+    state_class: total_increasing
+
+# --- Meter trigger logic ---
+binary_sensor:
+  - platform: template
+    name: "Impulse Status"
+    id: magnet_presence_sensor
+    # Threshold Values: 0.54 and 0.55
+    # 0.54 is the typical analog reading from the Hall sensor when the magnet is not nearby.
+    # 0.55 is the threshold value: when the sensor reading exceeds this, it means the magnet is close to the sensor (the wheel has rotated).
+    # The difference between these values is small, so the threshold must be set carefully to avoid false triggers or missed impulses.
+    # You may need to adjust these values depending on your sensor, magnet strength, and installation.
+    # To calibrate, observe the sensor readings in ESPhome logs as the wheel rotates and set the threshold slightly above the "no magnet" value.
+    lambda: |-
+      if (id(hall_sensor_analog).has_state()) {
+        // 0.54 - value without magnet
+        return fabs(id(hall_sensor_analog).state) > 0.55;
+      } else {
+        return false;
+      }
+    on_press:
+      then:
+        - lambda: 'id(pulse_counter_gas) += 1;'
+        - sensor.template.publish:
+            id: gasmeter_pulse
+            state: !lambda 'return id(pulse_counter_gas);'
+        - sensor.template.publish:
+            id: total_gas_m3
+            state: !lambda 'return (id(pulse_counter_gas) * id(m3_gas_per_pulse)) + id(total_gas_m3_start_value);'
+        - homeassistant.service:
+            service: input_number.set_value
+            data:
+              entity_id: input_number.gas_impulse_count
+              value: !lambda 'return id(pulse_counter_gas);'
+        # Save every 5th pulse to flash
+        - lambda: |-
+            if (id(pulse_counter_gas) % 5 == 0) {
+              id(pulse_counter_saved) = id(pulse_counter_gas);
+              ESP_LOGI("gas", "Saved to flash: %d", id(pulse_counter_saved));
+            }
+
+# --- Buttons for manual correction ---
+button:
+  - platform: template
+    name: "Add Impulse (+1)"
+    icon: "mdi:plus-circle-outline"
+    on_press:
+      then:
+        - lambda: 'id(pulse_counter_gas) += 1;'
+        - logger.log:
+            format: "Button (+): New pulse count is %d"
+            args:
+              - 'id(pulse_counter_gas)'
+        - sensor.template.publish:
+            id: gasmeter_pulse
+            state: !lambda 'return id(pulse_counter_gas);'
+        - sensor.template.publish:
+            id: total_gas_m3
+            state: !lambda 'return (id(pulse_counter_gas) * id(m3_gas_per_pulse)) + id(total_gas_m3_start_value);'
+        - homeassistant.service:
+            service: input_number.set_value
+            data:
+              entity_id: input_number.gas_impulse_count
+              value: !lambda 'return id(pulse_counter_gas);'
+        - script.execute: save_to_flash_script
+
+  - platform: template
+    name: "Subtract Impulse (-1)"
+    icon: "mdi:minus-circle-outline"
+    on_press:
+      then:
+        - lambda: |-
+            id(pulse_counter_gas) -= 1;
+            if (id(pulse_counter_gas) < 0) {
+              id(pulse_counter_gas) = 0;
+            }
+        - logger.log:
+            format: "Button (-): New pulse count is %d"
+            args:
+              - 'id(pulse_counter_gas)'
+        - sensor.template.publish:
+            id: gasmeter_pulse
+            state: !lambda 'return id(pulse_counter_gas);'
+        - sensor.template.publish:
+            id: total_gas_m3
+            state: !lambda 'return (id(pulse_counter_gas) * id(m3_gas_per_pulse)) + id(total_gas_m3_start_value);'
+        - homeassistant.service:
+            service: input_number.set_value
+            data:
+              entity_id: input_number.gas_impulse_count
+              value: !lambda 'return id(pulse_counter_gas);'
+        - script.execute: save_to_flash_script
+
+  - platform: restart
+    name: "Restart ESP"
+    icon: "mdi:restart"

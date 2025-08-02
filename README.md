@@ -1,16 +1,17 @@
-# ESP8266 Gas Meter Pulse Reader (ESPhome)
+# ESP8266 Gas Meter Pulse Reader (ESPhome + Home Assistant)
 
 This integration is very inexpensive because it requires very few components, and all of them are cheap and widely available.
 
 **Approximate component costs:**
-- ESP8266 D1 Mini v4: ~$1.5–3 ([Buy on AliExpress](https://a.aliexpress.com/_EwQjbHk))
+- ESP8266 D1 Mini v4.0.0: ~$1.5–3 ([Buy on AliExpress](https://a.aliexpress.com/_EwQjbHk))  
+  *(This is the board I used, but any ESP8266 or ESP32 board will work.)*
 - Hall sensor 49E: ~$0.20–0.50 ([Buy on AliExpress](https://a.aliexpress.com/_EyKh9nC))
 - Wires: ~$0.10
 - (Optional) 3D printed mount: ~$0.50
 
 **Total estimated cost:** ~$2.3–4
 
-This project implements a gas meter pulse counter using ESPhome, an ESP8266 (D1 Mini v4), and a Hall sensor (49E). It reads impulses from a mechanical gas meter and publishes the readings to Home Assistant.
+This project implements a gas meter pulse counter using ESPhome, an ESP8266 (D1 Mini v4.0.0), and a Hall sensor (49E). It reads impulses from a mechanical gas meter and publishes the readings to Home Assistant.
 
 ## Features
 
@@ -24,7 +25,7 @@ This project implements a gas meter pulse counter using ESPhome, an ESP8266 (D1 
 ## Wiring Diagram
 
 ```
-D1 Mini v4         Hall Sensor 49E
+D1 Mini v4.0.0         Hall Sensor 49E
 +--------------+   +----------------+
 |      3V3     |---| VCC (Pin 1)    |
 |      G       |---| GND (Pin 2)    |

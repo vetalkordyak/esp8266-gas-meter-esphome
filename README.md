@@ -166,7 +166,7 @@ The project includes a 3D print file for mounting the Hall sensor on the Gridwe 
 
 ## License
 
-669This project is licensed under the **GPL-3.0 license**.
+This project is licensed under the **GPL-3.0 license**.
 
 ### What you can do:
 - Use, modify, and share the code freely.
